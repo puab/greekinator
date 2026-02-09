@@ -6,6 +6,3 @@ Grab data from gexbot using the `!triggers qqq` command (remove the "---TRUNCATE
 ▼ -> put wall  
 Γ -> gamma wall  
 ⇑ -> vol trigger  
-
-# Known issues
-Only supports QQQ/NQ for now. Soon SPY/ES support
