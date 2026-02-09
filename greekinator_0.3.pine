@@ -1,0 +1,338 @@
+//@version=6
+indicator("greekinator", overlay=true, max_lines_count=500, max_boxes_count=500, max_polylines_count=100, scale=scale.right)
+
+// ===== inputs
+levelCount = input.int(20, title="level count", minval=1, maxval=50)
+drawOnlyToday = input.bool(true, title="draw only for today")
+ignoreEmptyStrikes = input.bool(false, title="ignore empty strike levels")
+inputData = input.string(defval="", title="trigger str")
+
+lineCol = color.rgb(130, 130, 130, 20)
+
+showLabels = true
+labelTextCol = color.white
+labelBgCol = color.rgb(30,30,30,0)
+
+// ===== types
+type ConvertedStrikePrice
+    float priceOnQQQ
+    float priceOnNq
+    int position
+
+type Trigger
+    string expirationStr
+    float volTrigger
+    float gammaWall
+    float callWall
+    float putWall
+
+// ===== time vars
+tz = "America/New_York"
+
+nyDay = dayofweek(time, tz)
+nyHour = hour(time, tz)
+nyMinute = minute(time, tz)
+
+isNewDay = nyHour == 18 and nyMinute == 0
+isRTH = (nyHour == 9 ? nyMinute >= 30 : nyHour > 9) and (nyHour < 16)
+
+// ===== globals
+var float qqqBasePrice = na
+var ConvertedStrikePrice[] convertedStrikesArray = array.new<ConvertedStrikePrice>()
+var label[] levelLabels = array.new<label>()
+var Trigger[] triggers = array.new<Trigger>()
+var int sessionStartTime = na
+
+// ===== load gex data
+if barstate.isfirst
+    array.clear(triggers)
+
+    // Split only on literal "\n"
+    lines = str.split(inputData, "\\n")
+
+    for i = 0 to array.size(lines) - 1
+        line = str.trim(array.get(lines, i))
+        if str.length(line) == 0
+            continue
+
+        parts = str.split(line, ",")
+        if array.size(parts) != 5
+            continue
+
+        expStr = str.trim(array.get(parts, 0))
+        vol    = str.tonumber(str.trim(array.get(parts, 1)))
+        gamma  = str.tonumber(str.trim(array.get(parts, 2)))
+        callW  = str.tonumber(str.trim(array.get(parts, 3)))
+        putW   = str.tonumber(str.trim(array.get(parts, 4)))
+
+        if not na(vol) and not na(gamma) and not na(callW) and not na(putW)
+            array.push(triggers, Trigger.new(expStr, vol, gamma, callW, putW))
+
+// ===== functions
+// returns: [isCallWall, isPutWall, isGammaWall, isVolTrigger]
+f_getWallAttributes(_qqqPrice) =>
+    bool isCallWall = false
+    bool isPutWall = false
+    bool isGammaWall = false
+    bool isVolTrigger = false
+
+    for trigguh in triggers
+        if trigguh.callWall == _qqqPrice
+            isCallWall := true
+
+        if trigguh.putWall == _qqqPrice
+            isPutWall := true
+
+        if trigguh.gammaWall == _qqqPrice
+            isGammaWall := true
+
+        if trigguh.volTrigger == _qqqPrice
+            isVolTrigger := true
+
+    [isCallWall, isPutWall, isGammaWall, isVolTrigger]
+
+f_tryGrabPrice(idx) =>
+    ConvertedStrikePrice result = na
+
+    // if ignoreEmptyStrikes is ON, only allow plots during today's RTH
+    // if ignoreEmptyStrikes and not isRTH
+    //     result := na
+    // else
+    if array.size(convertedStrikesArray) > idx and barstate.isconfirmed
+        item = array.get(convertedStrikesArray, idx)
+
+        kill = false
+        if ignoreEmptyStrikes
+            [cw, pw, gw, vt] = f_getWallAttributes(item.priceOnQQQ)
+            if not (cw or pw or gw or vt)
+                kill := true
+
+        result := kill ? na : item
+
+    result
+
+f_ensureLabels(n) =>
+    while array.size(levelLabels) < n
+        array.push(levelLabels, label.new(na, na, "", style=label.style_label_left, textcolor=labelTextCol, color=labelBgCol, size=size.normal))
+
+f_updateRightLabels() =>
+    sz = array.size(convertedStrikesArray)
+
+    if sz > 0
+        // make sure label array matches strike array size
+        while array.size(levelLabels) < sz
+            array.push(levelLabels, label.new(na, na, "", style=label.style_label_left, textcolor=labelTextCol, color=labelBgCol, size=size.normal))
+
+        // loop through all strikes
+        for i = 0 to sz - 1
+            strike = array.get(convertedStrikesArray, i)
+            y = strike.priceOnNq
+
+            // label text = QQQ strike price
+            [cw, pw, gw, vt] = f_getWallAttributes(strike.priceOnQQQ)
+
+            shouldHideThisLabel = ignoreEmptyStrikes and not (cw or pw or gw or vt)
+
+            affix = ""
+
+            if cw
+                affix := affix + "▲"
+
+            if pw
+                affix := affix + "▼"
+
+            if gw
+                affix := affix + "Γ"
+
+            if vt
+                affix := affix + "⇑"
+
+            txt = str.tostring(int(strike.priceOnQQQ)) + affix
+            lb = array.get(levelLabels, i)
+
+            if showLabels and not shouldHideThisLabel
+                label.set_x(lb, bar_index)
+                label.set_y(lb, y)
+                label.set_text(lb, txt)
+                label.set_textcolor(lb, strike.position == 0 ? color.white : labelTextCol)
+                label.set_color(lb, labelBgCol)
+            else
+                // hide label if toggle off
+                label.set_text(lb, "")
+                label.set_color(lb, color.rgb(0, 0, 0, 100))
+
+qqq = request.security("NASDAQ:QQQ", timeframe.period, close)
+nq  = request.security("CME_MINI:NQ1!", timeframe.period, close)
+
+// rawRatio = nq / qqq
+// ratio = ta.sma(rawRatio, 14)
+
+ratio = nq / qqq
+
+// create and update prices only within rth - qqq open hrs
+if isRTH
+    // if rth just started, create initial levels and cleanup what we had before
+    if not isRTH[1]
+        // store session start
+        sessionStartTime := time
+
+        // clear
+        array.clear(convertedStrikesArray)
+
+        // base
+        qqqBasePrice := math.floor(qqq[1])
+        baseNqPrice = qqqBasePrice * ratio
+        array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqBasePrice, baseNqPrice, 0))
+
+        // create positive
+        for i = 1 to levelCount
+            qqqPrice = qqqBasePrice + i
+            positiveLevel = qqqPrice * ratio
+            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, positiveLevel, i))
+
+        // create negative
+        for i = 1 to levelCount
+            qqqPrice = qqqBasePrice - i
+            negativeLevel = qqqPrice * ratio
+            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, negativeLevel, -i))
+
+    // update prices
+    sz = array.size(convertedStrikesArray)
+    if sz > 0
+        for i = 0 to sz - 1
+            strike = array.get(convertedStrikesArray, i)
+            strike.priceOnNq := (qqqBasePrice + strike.position) * ratio
+            array.set(convertedStrikesArray, i, strike)
+
+if barstate.isconfirmed
+    f_updateRightLabels()
+
+today0930 = timestamp(tz, year(timenow, tz), month(timenow, tz), dayofmonth(timenow, tz), 9, 30)
+prev0930 = timenow < today0930 ? today0930 - 24 * 60 * 60 * 1000 : today0930
+isBarInCurrentSession = drawOnlyToday ? time >= prev0930 : true
+
+// ===== base
+b = f_tryGrabPrice(0)
+plot(isBarInCurrentSession and not na(b) ? b.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+// =====  positives
+p1 = f_tryGrabPrice(1)
+plot(isBarInCurrentSession and not na(p1) ? p1.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p2 = f_tryGrabPrice(2)
+plot(isBarInCurrentSession and not na(p2) ? p2.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p3 = f_tryGrabPrice(3)
+plot(isBarInCurrentSession and not na(p3) ? p3.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p4 = f_tryGrabPrice(4)
+plot(isBarInCurrentSession and not na(p4) ? p4.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p5 = f_tryGrabPrice(5)
+plot(isBarInCurrentSession and not na(p5) ? p5.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p6 = f_tryGrabPrice(6)
+plot(isBarInCurrentSession and not na(p6) ? p6.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p7 = f_tryGrabPrice(7)
+plot(isBarInCurrentSession and not na(p7) ? p7.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p8 = f_tryGrabPrice(8)
+plot(isBarInCurrentSession and not na(p8) ? p8.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p9 = f_tryGrabPrice(9)
+plot(isBarInCurrentSession and not na(p9) ? p9.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p10 = f_tryGrabPrice(10)
+plot(isBarInCurrentSession and not na(p10) ? p10.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p11 = f_tryGrabPrice(11)
+plot(isBarInCurrentSession and not na(p11) ? p11.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p12 = f_tryGrabPrice(12)
+plot(isBarInCurrentSession and not na(p12) ? p12.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p13 = f_tryGrabPrice(13)
+plot(isBarInCurrentSession and not na(p13) ? p13.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p14 = f_tryGrabPrice(14)
+plot(isBarInCurrentSession and not na(p14) ? p14.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p15 = f_tryGrabPrice(15)
+plot(isBarInCurrentSession and not na(p15) ? p15.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p16 = f_tryGrabPrice(16)
+plot(isBarInCurrentSession and not na(p16) ? p16.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p17 = f_tryGrabPrice(17)
+plot(isBarInCurrentSession and not na(p17) ? p17.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p18 = f_tryGrabPrice(18)
+plot(isBarInCurrentSession and not na(p18) ? p18.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p19 = f_tryGrabPrice(19)
+plot(isBarInCurrentSession and not na(p19) ? p19.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+p20 = f_tryGrabPrice(20)
+plot(isBarInCurrentSession and not na(p20) ? p20.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+// ===== negatives
+n21 = f_tryGrabPrice(21)
+plot(isBarInCurrentSession and not na(n21) ? n21.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n22 = f_tryGrabPrice(22)
+plot(isBarInCurrentSession and not na(n22) ? n22.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n23 = f_tryGrabPrice(23)
+plot(isBarInCurrentSession and not na(n23) ? n23.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n24 = f_tryGrabPrice(24)
+plot(isBarInCurrentSession and not na(n24) ? n24.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n25 = f_tryGrabPrice(25)
+plot(isBarInCurrentSession and not na(n25) ? n25.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n26 = f_tryGrabPrice(26)
+plot(isBarInCurrentSession and not na(n26) ? n26.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n27 = f_tryGrabPrice(27)
+plot(isBarInCurrentSession and not na(n27) ? n27.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n28 = f_tryGrabPrice(28)
+plot(isBarInCurrentSession and not na(n28) ? n28.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n29 = f_tryGrabPrice(29)
+plot(isBarInCurrentSession and not na(n29) ? n29.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n30 = f_tryGrabPrice(30)
+plot(isBarInCurrentSession and not na(n30) ? n30.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n31 = f_tryGrabPrice(31)
+plot(isBarInCurrentSession and not na(n31) ? n31.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n32 = f_tryGrabPrice(32)
+plot(isBarInCurrentSession and not na(n32) ? n32.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n33 = f_tryGrabPrice(33)
+plot(isBarInCurrentSession and not na(n33) ? n33.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n34 = f_tryGrabPrice(34)
+plot(isBarInCurrentSession and not na(n34) ? n34.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n35 = f_tryGrabPrice(35)
+plot(isBarInCurrentSession and not na(n35) ? n35.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n36 = f_tryGrabPrice(36)
+plot(isBarInCurrentSession and not na(n36) ? n36.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n37 = f_tryGrabPrice(37)
+plot(isBarInCurrentSession and not na(n37) ? n37.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n38 = f_tryGrabPrice(38)
+plot(isBarInCurrentSession and not na(n38) ? n38.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n39 = f_tryGrabPrice(39)
+plot(isBarInCurrentSession and not na(n39) ? n39.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
+
+n40 = f_tryGrabPrice(40)
+plot(isBarInCurrentSession and not na(n40) ? n40.priceOnNq : na, color=lineCol, linewidth=1, display=display.all - display.price_scale, style=plot.style_linebr)
