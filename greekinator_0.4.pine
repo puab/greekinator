@@ -4,6 +4,7 @@ indicator("greekinator", overlay=true, max_lines_count=500, max_boxes_count=500,
 // ===== inputs
 levelCount = input.int(20, title="level count", minval=1, maxval=50)
 includeDte = input.bool(true, title="include closest DTE on type icons")
+enableSmoothing = input.bool(false, title="enable smoothing")
 drawOnlyToday = input.bool(true, title="draw only for today")
 ignoreEmptyStrikes = input.bool(false, title="ignore empty strike levels")
 inputData = input.string(defval="", title="trigger str")
@@ -205,10 +206,10 @@ f_updateRightLabels() =>
 qqq = request.security("NASDAQ:QQQ", timeframe.period, close)
 nq  = request.security("CME_MINI:NQ1!", timeframe.period, close)
 
-// rawRatio = nq / qqq
-// ratio = ta.sma(rawRatio, 14)
-
-ratio = nq / qqq
+rawRatio = nq / qqq
+ratio = rawRatio
+if enableSmoothing
+    ratio := ta.sma(rawRatio, 14)
 
 // create and update prices only within rth - qqq open hrs
 if isRTH
