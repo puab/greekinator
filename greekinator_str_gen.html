@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+        />
+        <title>Table → Pine Input String</title>
+        <style>
+            body {
+                font-family:
+                    system-ui,
+                    -apple-system,
+                    Segoe UI,
+                    Roboto,
+                    Arial,
+                    sans-serif;
+                margin: 24px;
+                max-width: 900px;
+            }
+            textarea {
+                width: 100%;
+                min-height: 220px;
+                padding: 10px;
+                font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    monospace;
+                font-size: 13px;
+            }
+            button {
+                padding: 10px 14px;
+                cursor: pointer;
+            }
+            .row {
+                display: flex;
+                gap: 12px;
+                flex-wrap: wrap;
+                align-items: center;
+                margin: 12px 0;
+            }
+            .hint {
+                color: #555;
+                font-size: 13px;
+            }
+            .error {
+                color: #b00020;
+                white-space: pre-wrap;
+            }
+            .ok {
+                color: #0b7a0b;
+            }
+        </style>
+    </head>
+    <body>
+        <h2>Table → Pine input string</h2>
+        <p class="hint">
+            Paste the text containing your markdown-ish table. This will ignore
+            header lines, “EXPIRATION” lines, separators like <code>|---</code>,
+            and blank lines. Output is ONE line joined with the literal
+            <code>\n</code>.
+        </p>
+
+        <h3>Input</h3>
+        <textarea
+            id="input"
+            placeholder="Paste your table text here..."
+        ></textarea>
+
+        <div class="row">
+            <label class="hint"
+                >Date format:
+                <input
+                    id="dateFormat"
+                    value="MMM DD YYYY"
+                    style="padding: 6px 8px; width: 140px"
+                />
+            </label>
+            <span class="hint"
+                >(Matches Python: <code>%b %d %Y</code>, e.g.
+                <code>Feb 05 2026</code>)</span
+            >
+        </div>
+
+        <div class="row">
+            <button id="convert">Convert</button>
+            <button
+                id="download"
+                disabled
+            >
+                Download pine_input_string.txt
+            </button>
+            <span
+                id="status"
+                class="hint"
+            ></span>
+        </div>
+
+        <div
+            id="msg"
+            class="error"
+        ></div>
+
+        <h3>Output (single line)</h3>
+        <textarea
+            id="output"
+            readonly
+            placeholder="Output will appear here..."
+        ></textarea>
+
+        <script>
+            // Parse date like "Feb 05 2026" (Python: "%b %d %Y")
+            function parsePythonLikeDate(s) {
+                // Expect: MonAbbrev SP DD SP YYYY
+                // e.g. "Feb 05 2026" or "Feb 5 2026"
+                const parts = s.trim().split(/\s+/);
+                if (parts.length !== 3) return null;
+
+                const [monStr, dayStr, yearStr] = parts;
+                const months = {
+                    Jan: 0,
+                    Feb: 1,
+                    Mar: 2,
+                    Apr: 3,
+                    May: 4,
+                    Jun: 5,
+                    Jul: 6,
+                    Aug: 7,
+                    Sep: 8,
+                    Oct: 9,
+                    Nov: 10,
+                    Dec: 11,
+                };
+                const m = months[monStr];
+                const d = Number(dayStr);
+                const y = Number(yearStr);
+                if (
+                    m === undefined ||
+                    !Number.isFinite(d) ||
+                    !Number.isFinite(y)
+                )
+                    return null;
+
+                // Use UTC to avoid timezone/DST weirdness when diffing days
+                return new Date(Date.UTC(y, m, d));
+            }
+
+            function daysBetweenUTC(a, b) {
+                const msPerDay = 24 * 60 * 60 * 1000;
+                return Math.round((b.getTime() - a.getTime()) / msPerDay);
+            }
+
+            function parseTable(lines) {
+                const rows = [];
+
+                for (let raw of lines) {
+                    let line = raw.trim();
+                    if (!line) continue;
+                    if (line.includes('EXPIRATION')) continue;
+                    if (line.startsWith('|---')) continue;
+
+                    // Only accept lines that look like a pipe table row
+                    if (!line.includes('|')) continue;
+
+                    const parts = line
+                        .replace(/^\|/, '')
+                        .replace(/\|$/, '')
+                        .split('|')
+                        .map(p => p.trim());
+                    if (parts.length !== 5) continue;
+
+                    const [expiration, vol, gamma, call, put] = parts;
+
+                    const volNum = Number(vol);
+                    const gammaNum = Number(gamma);
+                    const callNum = Number(call);
+                    const putNum = Number(put);
+
+                    if (
+                        ![volNum, gammaNum, callNum, putNum].every(n =>
+                            Number.isFinite(n),
+                        )
+                    )
+                        continue;
+
+                    rows.push({
+                        expiration,
+                        vol: volNum,
+                        gamma: gammaNum,
+                        call: callNum,
+                        put: putNum,
+                    });
+                }
+
+                return rows;
+            }
+
+            const inputEl = document.getElementById('input');
+            const outputEl = document.getElementById('output');
+            const msgEl = document.getElementById('msg');
+            const statusEl = document.getElementById('status');
+            const convertBtn = document.getElementById('convert');
+            const downloadBtn = document.getElementById('download');
+
+            let lastOutput = '';
+
+            convertBtn.addEventListener('click', () => {
+                msgEl.textContent = '';
+                statusEl.textContent = '';
+                outputEl.value = '';
+                downloadBtn.disabled = true;
+                lastOutput = '';
+
+                const lines = inputEl.value.split(/\r?\n/);
+                const rows = parseTable(lines);
+
+                if (!rows.length) {
+                    msgEl.textContent =
+                        'No valid data found. Make sure your rows look like:\n| Feb 05 2026 | 12 | 34 | 56 | 78 |';
+                    return;
+                }
+
+                const baseDate = parsePythonLikeDate(rows[0].expiration);
+                if (!baseDate) {
+                    msgEl.textContent = `Could not parse base expiration date: "${rows[0].expiration}"\nExpected something like: Feb 05 2026`;
+                    return;
+                }
+
+                const csvChunks = [];
+                for (const r of rows) {
+                    const expDate = parsePythonLikeDate(r.expiration);
+                    if (!expDate) {
+                        msgEl.textContent = `Could not parse expiration date: "${r.expiration}"\nExpected something like: Feb 05 2026`;
+                        return;
+                    }
+                    const dte = daysBetweenUTC(baseDate, expDate);
+
+                    // Match your Python formatting: round to 0 decimals
+                    const chunk = `${dte}dte,${r.vol.toFixed(0)},${r.gamma.toFixed(0)},${r.call.toFixed(0)},${r.put.toFixed(0)}`;
+                    csvChunks.push(chunk);
+                }
+
+                // ONE LONG LINE joined with literal "\n"
+                const oneLine = csvChunks.join('\\n');
+                outputEl.value = oneLine;
+                lastOutput = oneLine;
+
+                statusEl.innerHTML = `<span class="ok">✅ Done!</span> Rows: ${rows.length}`;
+                downloadBtn.disabled = false;
+            });
+
+            downloadBtn.addEventListener('click', () => {
+                if (!lastOutput) return;
+                const blob = new Blob([lastOutput], {
+                    type: 'text/plain;charset=utf-8',
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'pine_input_string.txt';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            });
+        </script>
+    </body>
+</html>
