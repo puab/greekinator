@@ -9,3 +9,6 @@ Grab data from gexbot using the `!triggers qqq` command (remove the "---TRUNCATE
 ▼ -> put wall  
 Γ -> gamma wall  
 ⇑ -> vol trigger  
+
+<img width="627" height="577" alt="image" src="https://github.com/user-attachments/assets/42cd3d9b-e4ff-4823-af3f-23e3ac747f08" />
+
