@@ -3,6 +3,7 @@ indicator("greekinator", overlay=true, max_lines_count=500, max_boxes_count=500,
 
 // ===== inputs
 levelCount = input.int(20, title="level count", minval=1, maxval=50)
+includeDte = input.bool(true, title="include closest DTE on type icons")
 drawOnlyToday = input.bool(true, title="draw only for today")
 ignoreEmptyStrikes = input.bool(false, title="ignore empty strike levels")
 inputData = input.string(defval="", title="trigger str")
@@ -43,6 +44,10 @@ var label[] levelLabels = array.new<label>()
 var Trigger[] triggers = array.new<Trigger>()
 var int sessionStartTime = na
 
+isNQ = syminfo.root == "NQ" or syminfo.root == "MNQ"
+if not isNQ
+    runtime.error("Unsupported futures contract: NQ only")
+
 // ===== load gex data
 if barstate.isfirst
     array.clear(triggers)
@@ -69,27 +74,63 @@ if barstate.isfirst
             array.push(triggers, Trigger.new(expStr, vol, gamma, callW, putW))
 
 // ===== functions
-// returns: [isCallWall, isPutWall, isGammaWall, isVolTrigger]
+f_getDteNumByInt(dteInt) =>
+    strNum = str.tostring(dteInt)
+    result = ""
+    for i = 0 to str.length(strNum) - 1
+        ch = str.substring(strNum, i, i + 1)
+        result +=
+             ch == "0" ? "⁰" :
+             ch == "1" ? "¹" :
+             ch == "2" ? "²" :
+             ch == "3" ? "³" :
+             ch == "4" ? "⁴" :
+             ch == "5" ? "⁵" :
+             ch == "6" ? "⁶" :
+             ch == "7" ? "⁷" :
+             ch == "8" ? "⁸" :
+             ch == "9" ? "⁹" :
+             ch == "-" ? "⁻" : ""
+    result
+
+// returns: [isCallWall, isPutWall, isGammaWall, isVolTrigger, dte, dte, dte, dte]
 f_getWallAttributes(_qqqPrice) =>
     bool isCallWall = false
+    int closestCwExp = 999
+
     bool isPutWall = false
+    int closestPwExp = 999
+
     bool isGammaWall = false
+    int closestGwExp = 999
+
     bool isVolTrigger = false
+    int closestVtExp = 999
 
     for trigguh in triggers
+        dte = int(str.tonumber(str.substring(trigguh.expirationStr, 0, str.length(trigguh.expirationStr) - 3)))
+
         if trigguh.callWall == _qqqPrice
             isCallWall := true
+            if dte < closestCwExp
+                closestCwExp := dte
 
         if trigguh.putWall == _qqqPrice
             isPutWall := true
+            if dte < closestPwExp
+                closestPwExp := dte
 
         if trigguh.gammaWall == _qqqPrice
             isGammaWall := true
+            if dte < closestGwExp
+                closestGwExp := dte
 
         if trigguh.volTrigger == _qqqPrice
             isVolTrigger := true
+            if dte < closestVtExp
+                closestVtExp := dte
 
-    [isCallWall, isPutWall, isGammaWall, isVolTrigger]
+    [isCallWall, isPutWall, isGammaWall, isVolTrigger, closestCwExp, closestPwExp, closestGwExp, closestVtExp]
 
 f_tryGrabPrice(idx) =>
     ConvertedStrikePrice result = na
@@ -103,7 +144,7 @@ f_tryGrabPrice(idx) =>
 
         kill = false
         if ignoreEmptyStrikes
-            [cw, pw, gw, vt] = f_getWallAttributes(item.priceOnQQQ)
+            [cw, pw, gw, vt, _1, _2, _3, _4] = f_getWallAttributes(item.priceOnQQQ)
             if not (cw or pw or gw or vt)
                 kill := true
 
@@ -129,23 +170,23 @@ f_updateRightLabels() =>
             y = strike.priceOnNq
 
             // label text = QQQ strike price
-            [cw, pw, gw, vt] = f_getWallAttributes(strike.priceOnQQQ)
+            [cw, pw, gw, vt, cwe, pwe, gwe, vte] = f_getWallAttributes(strike.priceOnQQQ)
 
             shouldHideThisLabel = ignoreEmptyStrikes and not (cw or pw or gw or vt)
 
             affix = ""
 
             if cw
-                affix := affix + "▲"
+                affix := affix + "▲" + (includeDte ? f_getDteNumByInt(cwe) : "")
 
             if pw
-                affix := affix + "▼"
+                affix := affix + "▼" + (includeDte ? f_getDteNumByInt(pwe) : "")
 
             if gw
-                affix := affix + "Γ"
+                affix := affix + "Γ" + (includeDte ? f_getDteNumByInt(gwe) : "")
 
             if vt
-                affix := affix + "⇑"
+                affix := affix + "⇑" + (includeDte ? f_getDteNumByInt(vte) : "")
 
             txt = str.tostring(int(strike.priceOnQQQ)) + affix
             lb = array.get(levelLabels, i)
@@ -208,7 +249,15 @@ if barstate.isconfirmed
     f_updateRightLabels()
 
 today0930 = timestamp(tz, year(timenow, tz), month(timenow, tz), dayofmonth(timenow, tz), 9, 30)
-prev0930 = timenow < today0930 ? today0930 - 24 * 60 * 60 * 1000 : today0930
+
+oneDayMs = 24 * 60 * 60 * 1000
+timeOffset = oneDayMs
+
+// if monday then we want friday's 9:30
+if dayofweek(timenow) == dayofweek.monday
+    timeOffset := timeOffset + oneDayMs * 2
+
+prev0930 = timenow < today0930 ? today0930 - timeOffset : today0930
 isBarInCurrentSession = drawOnlyToday ? time >= prev0930 : true
 
 // ===== base
