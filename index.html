@@ -6,9 +6,18 @@
             name="viewport"
             content="width=device-width, initial-scale=1"
         />
-        <title>Table → Pine Input String</title>
+        <title>Gexbot triggers table -> greekinator input string</title>
         <style>
+            * {
+                color: white;
+            }
+            textarea,
+            input,
+            button {
+                background-color: #333;
+            }
             body {
+                background: black;
                 font-family:
                     system-ui,
                     -apple-system,
@@ -40,7 +49,7 @@
                 margin: 12px 0;
             }
             .hint {
-                color: #555;
+                color: #999;
                 font-size: 13px;
             }
             .error {
@@ -53,7 +62,7 @@
         </style>
     </head>
     <body>
-        <h2>Table → Pine input string</h2>
+        <h2>Gexbot triggers table -> greekinator input string</h2>
         <p class="hint">
             Paste the text containing your markdown-ish table. This will ignore
             header lines, “EXPIRATION” lines, separators like <code>|---</code>,
@@ -84,12 +93,6 @@
 
         <div class="row">
             <button id="convert">Convert</button>
-            <button
-                id="download"
-                disabled
-            >
-                Download pine_input_string.txt
-            </button>
             <span
                 id="status"
                 class="hint"
@@ -101,7 +104,7 @@
             class="error"
         ></div>
 
-        <h3>Output (single line)</h3>
+        <h3>Output</h3>
         <textarea
             id="output"
             readonly
@@ -200,7 +203,6 @@
             const msgEl = document.getElementById('msg');
             const statusEl = document.getElementById('status');
             const convertBtn = document.getElementById('convert');
-            const downloadBtn = document.getElementById('download');
 
             let lastOutput = '';
 
@@ -208,7 +210,6 @@
                 msgEl.textContent = '';
                 statusEl.textContent = '';
                 outputEl.value = '';
-                downloadBtn.disabled = true;
                 lastOutput = '';
 
                 const lines = inputEl.value.split(/\r?\n/);
@@ -246,22 +247,6 @@
                 lastOutput = oneLine;
 
                 statusEl.innerHTML = `<span class="ok">✅ Done!</span> Rows: ${rows.length}`;
-                downloadBtn.disabled = false;
-            });
-
-            downloadBtn.addEventListener('click', () => {
-                if (!lastOutput) return;
-                const blob = new Blob([lastOutput], {
-                    type: 'text/plain;charset=utf-8',
-                });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'pine_input_string.txt';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
             });
         </script>
     </body>
