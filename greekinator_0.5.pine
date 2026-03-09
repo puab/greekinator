@@ -215,28 +215,46 @@ if enableSmoothing
 if isRTH
     // if rth just started, create initial levels and cleanup what we had before
     if not isRTH[1]
-        // store session start
         sessionStartTime := time
-
-        // clear
         array.clear(convertedStrikesArray)
-
-        // base
         qqqBasePrice := math.floor(qqq[1])
-        baseNqPrice = qqqBasePrice * ratio
-        array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqBasePrice, baseNqPrice, 0))
 
-        // create positive
-        for i = 1 to levelCount
-            qqqPrice = qqqBasePrice + i
-            positiveLevel = qqqPrice * ratio
-            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, positiveLevel, i))
+        if ignoreEmptyStrikes
+            // collect all unique qqq prices that exist in trigger data
+            for trigguh in triggers
+                qqqPrice = trigguh.callWall
+                if not na(qqqPrice)
+                    [cw, pw, gw, vt, _1, _2, _3, _4] = f_getWallAttributes(qqqPrice)
+                    if cw or pw or gw or vt
+                        // check not already added
+                        alreadyAdded = false
+                        for existing in convertedStrikesArray
+                            if existing.priceOnQQQ == qqqPrice
+                                alreadyAdded := true
+                                break
+                        if not alreadyAdded
+                            pos = int(qqqPrice - qqqBasePrice)
+                            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, qqqPrice * ratio, pos))
 
-        // create negative
-        for i = 1 to levelCount
-            qqqPrice = qqqBasePrice - i
-            negativeLevel = qqqPrice * ratio
-            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, negativeLevel, -i))
+                for qqqPrice2 in array.from(trigguh.putWall, trigguh.gammaWall, trigguh.volTrigger)
+                    if not na(qqqPrice2)
+                        alreadyAdded = false
+                        for existing in convertedStrikesArray
+                            if existing.priceOnQQQ == qqqPrice2
+                                alreadyAdded := true
+                                break
+                        if not alreadyAdded
+                            pos = int(qqqPrice2 - qqqBasePrice)
+                            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice2, qqqPrice2 * ratio, pos))
+        else
+            // original behavior
+            array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqBasePrice, qqqBasePrice * ratio, 0))
+            for i = 1 to levelCount
+                qqqPrice = qqqBasePrice + i
+                array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, qqqPrice * ratio, i))
+            for i = 1 to levelCount
+                qqqPrice = qqqBasePrice - i
+                array.push(convertedStrikesArray, ConvertedStrikePrice.new(qqqPrice, qqqPrice * ratio, -i))
 
     // update prices
     sz = array.size(convertedStrikesArray)
